@@ -1,0 +1,264 @@
+#!/bin/bash
+
+######################################################################
+#                                                                    #
+# AUTHOR:          kubecy                                            #
+# SCRIPT ID:       installMySQL.sh                                   #
+# FUNCTION:        install mysql8 and mysql5.7 on Debian and RedHat  #
+# CREATE TIME:     2024/11/30                                        #
+# PLATFORM:        Linux                                             #
+#                                                                    #
+######################################################################
+
+MYSQL_URL="https://downloads.mysql.com/archives/get/p/23/file/"
+MYSQL_TAR_PATH="/opt"
+MYSQL_APP_DIR="/app/mysql"
+MYSQL_APP_SOFTWARE=""
+MYSQL_WORK_DIR=("data" "logs" "etc" "backup" "tmp")
+MYSQL_USER="mysql"
+MYSQL_GROUP="mysql"
+MYSQL_UID="2589"
+MYSQL_GID="2589"
+OS_GLIBC_VERSION=$(getconf GNU_LIBC_VERSION | awk '{print $2}')
+
+function logger() {
+  TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S')
+  local FID=$(basename "${BASH_SOURCE[1]}")
+  local SOURCE="\033[35m[$FID:${BASH_LINENO[0]}]\033[0m"
+  case "$1" in
+    debug)
+      echo -e "\033[35m$TIMESTAMP\033[0m $SOURCE \033[36mDEBUG $2\033[0m"
+      ;;
+    info)
+      echo -e "\033[35m$TIMESTAMP\033[0m $SOURCE \033[32mINFO $2\033[0m"
+      ;;
+    warn)
+      echo -e "\033[35m$TIMESTAMP\033[0m $SOURCE \033[33mWARN $2\033[0m"
+      ;;
+    error)
+      echo -e "\033[35m$TIMESTAMP\033[0m $SOURCE \033[31mERROR $2\033[0m"
+      ;;
+    *) ;;
+  esac
+}
+
+pgrep -x "mysqld" > /dev/null
+if pgrep -x "mysqld" > /dev/null; then
+    logger warn "MySQL 已在运行, 是否继续操作? [y/n]: "
+    read CHOICE
+    if [[ ${CHOICE} != "y" && ${CHOICE} != "Y" ]]; then
+        logger debug "脚本已退出."
+        exit 0
+    fi
+fi  
+
+function MysqlDownload() {
+    logger debug "Optional mysql version:"
+    cat << EOF
+-------------------------------------------------------------------------------------
+mysql-8.0.34-linux-glibc2.28-x86_64.tar.gz
+mysql-8.0.24-linux-glibc2.12-x86_64.tar.xz
+mysql-5.7.38-linux-glibc2.12-x86_64.tar.gz
+-------------------------------------------------------------------------------------
+EOF
+    logger debug "当前系统 glibc 版本: ${OS_GLIBC_VERSION}"
+    logger debug "更多GA版本请参考MySQL官方地址: https://downloads.mysql.com/archives/community/"
+    read -p "Please enter the version of MySQL you need to download [ e.g：mysql-8.0.34-linux-glibc2.28-x86_64.tar.gz ]: " MYSQL_VERSION
+
+    if [ -f ${MYSQL_TAR_PATH}/${MYSQL_VERSION} ]; then
+        logger info "${MYSQL_TAR_PATH}/${MYSQL_VERSION} 已存在."
+    else
+        logger debug "-----------------------------------------正在下载${MYSQL_VERSION}----------------------------------------------"
+        wget -P ${MYSQL_TAR_PATH} "${MYSQL_URL}/${MYSQL_VERSION}" && logger info "${MYSQL_VERSION} 下载成功!" || { logger error "${MYSQL_VERSION} 下载失败, 请检查
+网络!" ; exit 0; }
+    fi
+    MYSQL_GLIBC_VERSION=$(echo ${MYSQL_VERSION} | sed -E 's/.*glibc([0-9]+\.[0-9]+).*/\1/')
+    if echo "${OS_GLIBC_VERSION} ${MYSQL_GLIBC_VERSION}" | awk '{if ($1 < $2) print "true"; else print "false"}' | grep -q "true"; then
+        logger warn "系统glibc: ${OS_GLIBC_VERSION}, MYSQL glibc: ${MYSQL_GLIBC_VERSION}, 版本不兼容, 已退出脚本."
+        exit 0
+    fi
+
+}
+
+function InstallPackages() {
+    . /etc/os-release
+    OS_ID=$( echo ${ID} | tr '[:upper:]' '[:lower:]')
+    echo ${OS_ID}
+    if [[ "${OS_ID}" == "ubuntu" || "${OS_ID}" == "debian" ]]; then
+        logger info "当前发行版本: ${OS_ID}"
+        PACKAGES=("libaio1" "wget" "numactl" "libncurses5")
+        INSTALL_CMD="apt-get install -y"
+    elif [[ "${OS_ID}" == "centos" || "${OS_ID}" == "rhel" ]]; then
+        logger info "当前发行版本: ${OS_ID}"
+        PACKAGES=("libaio" "wget" "numactl")
+        if echo "${VERSION_ID} 8" | awk '{if ($1 >= $2) print "true"; else print "false"}' | grep -q "true"; then
+            PACKAGES+=("ncurses-compat-libs")
+        fi
+        INSTALL_CMD="yum install -y"
+    else
+        logger error "不支持的操作系统类型：${OS_ID}"
+        exit 0
+    fi
+
+    logger debug "-----------------------------------------正在安装依赖包----------------------------------------------"
+    for PACKAGE in "${PACKAGES[@]}"; do
+        if [[ "${OS_ID}" == "ubuntu" || "${OS_ID}" == "debian" ]]; then
+            if ! dpkg -l | grep -q "${PACKAGE}"; then
+                logger debug "正在安装 ${PACKAGE}..."
+                sudo ${INSTALL_CMD} ${PACKAGE}
+                if [[ $? -eq 0 ]]; then
+                    logger info "${PACKAGE} 安装成功."
+                else
+                    logger error "${PACKAGE} 安装失败, 退出脚本."
+                    exit 0
+                fi
+            else
+                logger debug "${PACKAGE} 已安装, 跳过."
+            fi
+        elif [[ "${OS_ID}" == "centos" || "${OS_ID}" == "rhel" ]]; then
+            if ! rpm -q "${PACKAGE}" > /dev/null 2>&1; then
+                logger debug "正在安装 ${PACKAGE}..."
+                sudo ${INSTALL_CMD} ${PACKAGE}
+                if [[ $? -eq 0 ]]; then
+                    logger info "${PACKAGE} 安装成功."
+                else
+                    logger error "${PACKAGE} 安装失败, 退出脚本."
+                    exit 0
+                fi
+            else
+                logger info "${PACKAGE} 已安装, 跳过."
+            fi
+        fi
+    done
+}
+
+function BasicEnv() {
+    if id ${MYSQL_USER} > /dev/null 2>&1; then
+        logger info "用户: ${MYSQL_USER} 已存在."
+    else
+        logger debug "用户: ${MYSQL_USER} 不存在，正在创建......"
+        if groupadd -g ${MYSQL_GID} ${MYSQL_GROUP} && useradd -r -u ${MYSQL_UID} -g ${MYSQL_GROUP} -s /bin/false ${MYSQL_USER}; then
+            logger info "用户: ${MYSQL_USER} 创建成功."
+        else
+            logger error "用户: ${MYSQL_USER} 创建失败."
+        fi
+    fi
+    for DIR in "${MYSQL_WORK_DIR[@]}"; do
+        if [ ! -d "${MYSQL_APP_DIR}/${DIR}" ]; then
+            mkdir -p ${MYSQL_APP_DIR}/${DIR}
+            logger info "${MYSQL_APP_DIR}/${DIR} 创建完成."
+        else
+            logger info "${MYSQL_APP_DIR}/${DIR} 已存在."
+        fi
+   done    
+}
+
+
+function MyConf() {
+cat > /app/mysql/etc/my.cnf << "EOF"
+[mysqldump]
+socket = /app/mysql/etc/mysql3306.sock
+
+[mysql]
+socket = /app/mysql/etc/mysql3306.sock
+
+[mysqladmin]
+socket = /app/mysql/etc/mysql3306.sock
+
+[mysqld]
+default_authentication_plugin = mysql_native_password
+user = mysql
+basedir = /usr/local/mysql
+datadir = /app/mysql/data
+server_id = 121
+port = 3306
+socket = /app/mysql/etc/mysql3306.sock
+pid-file=/app/mysql/etc/mysql.pid
+
+#general_log = 1
+#general_log_file = /app/mysql/logs/query_log/general_query.log
+log_error = /app/mysql/logs/error_log/error.log
+log_bin = /app/mysql/logs/bin_log/binlog
+binlog_format = ROW
+log_bin_trust_function_creators = 1
+slow_query_log = 1
+slow_query_log_file = /app/mysql/logs/slow_log/slow.log
+long_query_time = 2
+log_queries_not_using_indexes = 0 
+log_slow_admin_statements = 1 
+log_slow_slave_statements = 1 
+log_timestamps = SYSTEM 
+relay_log = /app/mysql/logs/relay_log/relay-bin
+relay_log_purge = 1
+gtid_mode = ON
+enforce_gtid_consistency = 1
+log_slave_updates= ON
+innodb_data_file_path=ibdata1:2000M:autoextend
+EOF
+}
+
+
+function MysqlInstall() {
+    logger debug "------------------${MYSQL_VERSION} 正在解压至 ${MYSQL_APP_DIR}---------------------"
+    cd ${MYSQL_TAR_PATH}
+    if [[ ${MYSQL_VERSION} == *.tar.gz ]]; then
+        MYSQL_APP_SOFTWARE=$(basename ${MYSQL_VERSION} .tar.gz)
+    elif [[ ${MYSQL_VERSION} == *.tar.xz ]]; then
+        MYSQL_APP_SOFTWARE=$(basename ${MYSQL_VERSION} .tar.xz)
+    else
+        logger error "Unknown ${MYSQL_VERSION} type"
+    fi
+
+    if tar -xf ${MYSQL_VERSION} -C ${MYSQL_APP_DIR} && cd ${MYSQL_APP_DIR}/${MYSQL_APP_SOFTWARE}; then
+        logger info "${MYSQL_VERSION} 解压成功."
+    else
+        logger error "${MYSQL_VERSION} 压失败."
+        exit 0
+    fi
+    ln -svf ${MYSQL_APP_DIR}/${MYSQL_APP_SOFTWARE} /usr/local/mysql > /dev/null
+    cat > /etc/profile.d/mysql.sh << "EOF"
+## mysql
+export MYSQL_HOME=/usr/local/mysql
+export PATH=$PATH:$MYSQL_HOME/bin
+EOF
+    source /etc/profile.d/mysql.sh
+    mysql -V >/dev/null 2>&1 && logger info "MySQL 环境变量配置正确!" || logger error "MySQL 环境变量配置未生效!"
+    MyConf
+    
+    ln -svf ${MYSQL_APP_DIR}/etc/my.cnf /etc/my.cnf > /dev/null
+    mkdir -p ${MYSQL_APP_DIR}/logs/{general_query_log,bin_log,slow_log,error_log,relay_log}
+    chown -R ${MYSQL_USER}:${MYSQL_GROUP} ${MYSQL_APP_DIR}
+    logger debug "-----------------------------------------正在初始化数据库----------------------------------------------"
+    mysqld --defaults-file=/etc/my.cnf --initialize-insecure && logger info "MySQL 初始化成功!" || logger error "MySQL 初始化失败!"
+    \cp /usr/local/mysql/support-files/mysql.server /etc/init.d/mysqld
+    systemctl enable mysqld > /dev/null 2>&1 && systemctl start mysqld >/dev/null 2>&1 && logger info "MySQL started successfully!" || logger error "Failed to start MySQL!"
+    if pgrep -x "mysqld" > /dev/null; then
+        logger info "MySQL is Running!"
+    else
+        logger error "MySQL is not Running!"
+    fi
+}
+
+function Prompt() {
+    logger debug "-----------------------------------------请执行如下命令完成初始化----------------------------------------------"
+
+    cat << EOF
+source /etc/profile.d/mysql.sh       -->> 脚本中没有反映到终端, 需要在终端手动执行 source 来重新加载这些配置。
+
+mysql_secure_installation (可选)     -->> 安装 MySQL 后进行初步的安全配置, 设置 MySQL 的 root 密码, 移除默认的测试数据库, 禁用远程 root 登录等。
+
+mysql -e "CREATE USER 'dbadmin'@'localhost' IDENTIFIED BY '1qaz@WSX'"
+
+mysql -e "GRANT ALL PRIVILEGES ON *.* TO 'dbadmin'@'localhost' WITH GRANT OPTION"
+
+mysql -udbadmin -p1qaz@WSX -e "SHOW DATABASES"
+
+EOF
+logger debug "-------------------------------------------------------------------------------------------------------------------"
+}
+
+MysqlDownload
+InstallPackages
+BasicEnv
+MysqlInstall
+Prompt
