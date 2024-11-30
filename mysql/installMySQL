@@ -94,7 +94,7 @@ function InstallPackages() {
         fi
         INSTALL_CMD="yum install -y"
     else
-        logger error "不支持的操作系统类型：${OS_ID}"
+        logger error "不支持的操作系统类型：${OS_ID}!"
         exit 0
     fi
 
