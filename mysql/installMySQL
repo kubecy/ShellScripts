@@ -9,6 +9,9 @@
 # PLATFORM:        Linux                                             #
 #                                                                    #
 ######################################################################
+set -o nounset
+set -o errexit
+set -o pipefail
 
 MYSQL_URL="https://downloads.mysql.com/archives/get/p/23/file/"
 MYSQL_TAR_PATH="/opt"
@@ -77,7 +80,6 @@ EOF
         logger warn "系统glibc: ${OS_GLIBC_VERSION}, MYSQL glibc: ${MYSQL_GLIBC_VERSION}, 版本不兼容, 已退出脚本."
         exit 0
     fi
-
 }
 
 function InstallPackages() {
