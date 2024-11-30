@@ -102,7 +102,7 @@ function InstallPackages() {
     for PACKAGE in "${PACKAGES[@]}"; do
         if [[ "${OS_ID}" == "ubuntu" || "${OS_ID}" == "debian" ]]; then
             if ! dpkg -l | grep -q "${PACKAGE}"; then
-                logger debug "正在安装 ${PACKAGE}..."
+                logger debug "正在安装 ${PACKAGE}......"
                 sudo ${INSTALL_CMD} ${PACKAGE}
                 if [[ $? -eq 0 ]]; then
                     logger info "${PACKAGE} 安装成功."
