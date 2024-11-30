@@ -9,9 +9,6 @@
 # PLATFORM:        Linux                                             #
 #                                                                    #
 ######################################################################
-set -o nounset
-set -o errexit
-set -o pipefail
 
 MYSQL_URL="https://downloads.mysql.com/archives/get/p/23/file/"
 MYSQL_TAR_PATH="/opt"
