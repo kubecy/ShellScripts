@@ -124,7 +124,7 @@ function InstallPackages() {
                     exit 0
                 fi
             else
-                logger info "${PACKAGE} 已安装, 跳过."
+                logger debug "${PACKAGE} 已安装, 跳过."
             fi
         fi
     done
