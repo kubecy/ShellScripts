@@ -83,7 +83,6 @@ EOF
 function InstallPackages() {
     . /etc/os-release
     OS_ID=$( echo ${ID} | tr '[:upper:]' '[:lower:]')
-    echo ${OS_ID}
     if [[ "${OS_ID}" == "ubuntu" || "${OS_ID}" == "debian" ]]; then
         logger info "当前发行版本: ${OS_ID}"
         PACKAGES=("libaio1" "wget" "numactl" "libncurses5")
@@ -241,8 +240,8 @@ EOF
 
 function Prompt() {
     logger debug "-----------------------------------------请执行如下命令完成初始化----------------------------------------------"
-
     cat << EOF
+
 source /etc/profile.d/mysql.sh       -->> 脚本中没有反映到终端, 需要在终端手动执行 source 来重新加载这些配置。
 
 mysql_secure_installation (可选)     -->> 安装 MySQL 后进行初步的安全配置, 设置 MySQL 的 root 密码, 移除默认的测试数据库, 禁用远程 root 登录等。
