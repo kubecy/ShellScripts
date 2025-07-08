@@ -70,7 +70,7 @@ x86_64
 -------------------------------------------------------------------------------------
 
 
-DOCKER VERSION: 推荐版本: docker-24.0.8.tgz docker-25.0.5.tgz docker-26.1.4.tgz docker-28.3.1.tgz"
+DOCKER VERSION: 
 -------------------------------------------------------------------------------------
 docker-18.06.3-ce.tgz
 docker-18.09.9.tgz
@@ -84,6 +84,7 @@ docker-28.3.1.tgz
 -------------------------------------------------------------------------------------
 EOF
   logger debug "更多版本请参考: https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable/"
+  logger info "若不输入, 则默认值: ARCH: x86_64, DOCKER_VER: docker-28.3.1.tgz,  DOWNLOAD_DIR: /opt"
   read -p "请输入CPU ARCH:  " ARCH
   read -p "请输入docker版本:  " DOCKER_VER
   read -p "请输入docker下载至的目录:  " DOWNLOAD_DIR
@@ -110,7 +111,7 @@ EOF
   if [[ -f ${DOWNLOAD_DIR}/${DOCKER_VER} ]]; then
     logger warn "${DOCKER_VER} 二进制文件已存在 ARCH: $ARCH, DOCKER_VER: ${DOCKER_VER},  DOWNLOAD_DIR: ${DOWNLOAD_DIR}"
   else 
-    logger info "开始下载docker二进制文件, ARCH: $ARCH, DOCKER_VER: ${DOCKER_VER},  DOWNLOAD_DIR: ${DOWNLOAD_DIR}"
+    logger info "开始下载docker二进制文件 ARCH: $ARCH, DOCKER_VER: ${DOCKER_VER},  DOWNLOAD_DIR: ${DOWNLOAD_DIR}"
     if [[ -e /usr/bin/wget ]];then
       wget -c --user-agent="Mozilla" --no-check-certificate -P ${DOWNLOAD_DIR} "${DOCKER_URL}" || { logger error "${DOCKER_VER} 下载失败"; exit 1; }
     else
@@ -180,22 +181,22 @@ EOF
 }
 EOF
 
-  logger debug "生成守护进程 docker.socket"
-  cat > /etc/systemd/system/docker.socket << EOF
-[Unit]
-Description=Docker Socket for the API
-PartOf=docker.service
-
-[Socket]
-ListenStream=/run/docker.sock
-SocketMode=0660
-SocketUser=root
-SocketGroup=docker
-
-[Install]
-WantedBy=sockets.targe
-EOF
-
+#  logger debug "生成守护进程 docker.socket"
+#  cat > /etc/systemd/system/docker.socket << EOF
+#[Unit]
+#Description=Docker Socket for the API
+#PartOf=docker.service
+#
+#[Socket]
+#ListenStream=/run/docker.sock
+#SocketMode=0660
+#SocketUser=root
+#SocketGroup=docker
+#
+#[Install]
+#WantedBy=sockets.targe
+#EOF
+#
   logger debug "生成containerd服务启动文件"
 cat >/etc/systemd/system/containerd.service << EOF
 [Unit]
@@ -222,8 +223,8 @@ WantedBy=multi-user.target
 EOF
 
   logger debug "启动、开机自启动docker服务"
-  systemctl enable docker
-  systemctl daemon-reload && systemctl restart docker && sleep 3
+  systemctl enable  --now docker containerd
+  #systemctl daemon-reload && systemctl restart docker && sleep 3
 }
 
 
