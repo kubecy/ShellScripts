@@ -10,6 +10,29 @@
 #                                                                    #
 ######################################################################
 
+## 检查是否已安装容器运行库
+#systemctl status docker|grep -i Active|grep -q running && { logger warn "docker 正在运行中"; return 0; }
+##
+VALID_ARCHS=("aarch64" "armel" "armhf" "ppc64le" "s390x" "x86_64") 
+DOCKER_MIRRORS=(
+  "https://docker.1ms.run"
+  "https://hub1.nat.tf"
+  "https://docker.1panel.live"
+  "https://proxy.1panel.live"
+  "https://hub.rat.dev"
+  "https://docker.amingg.com"
+)
+
+
+## docker包解压目录
+DOCKER_TAR_DIR="/etc/kubecy/down"
+DOCKER_BIN="/etc/kubecy/bin/docker-bin"
+
+
+## docker数据目录
+DOCKER_DATA_ROOT="/var/lib/docker"
+
+
 
 function logger() {
   TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S')
@@ -31,4 +54,179 @@ function logger() {
     *) ;;
   esac
 }
+
+
+function download_docker() {
+  logger debug "Optional <<CPU ARCH>> or <<DOCKER VERSION>>:"
+  cat << EOF
+CPU ARCH:
+-------------------------------------------------------------------------------------
+aarch64
+armel
+armhf
+ppc64le
+s390x
+x86_64
+-------------------------------------------------------------------------------------
+
+
+DOCKER VERSION: 推荐版本: docker-24.0.8.tgz docker-25.0.5.tgz docker-26.1.4.tgz docker-28.3.1.tgz"
+-------------------------------------------------------------------------------------
+docker-18.06.3-ce.tgz
+docker-18.09.9.tgz
+docker-19.03.9.tgz
+docker-20.10.18.tgz
+docker-24.0.8.tgz
+docker-25.0.5.tgz
+docker-26.1.4.tgz
+docker-27.5.1.tgz
+docker-28.3.1.tgz
+-------------------------------------------------------------------------------------
+EOF
+  logger debug "更多版本请参考: https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable/"
+  read -p "请输入CPU ARCH:  " ARCH
+  read -p "请输入docker版本:  " DOCKER_VER
+  read -p "请输入docker下载至的目录:  " DOWNLOAD_DIR
+  
+  ## 设置默认值
+  : "${ARCH:=x86_64}"
+  : "${DOCKER_VER:=docker-28.3.1.tgz}"
+  : "${DOWNLOAD_DIR:=/opt}"
+  
+  ## 验证架构
+  if ! printf '%s\n' "${VALID_ARCHS[@]}" | grep -qx "$ARCH"; then
+    logger error "不支持的CPU架构: $ARCH" && exit 1
+  fi
+
+  if [[ ! -d ${DOWNLOAD_DIR} ]]; then
+    mkdi -p ${DOWNLOAD_DIR} && logger info "目录 ${DOWNLOAD_DIR} 创建成功"
+  else
+    logger info "目录 ${DOWNLOAD_DIR} 已存在"
+
+  fi
+
+  DOCKER_URL="https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable/${ARCH}/${DOCKER_VER}"
+
+  if [[ -f ${DOWNLOAD_DIR}/${DOCKER_VER} ]]; then
+    logger warn "${DOCKER_VER} 二进制文件已存在 ARCH: $ARCH, DOCKER_VER: ${DOCKER_VER},  DOWNLOAD_DIR: ${DOWNLOAD_DIR}"
+  else 
+    logger info "开始下载docker二进制文件, ARCH: $ARCH, DOCKER_VER: ${DOCKER_VER},  DOWNLOAD_DIR: ${DOWNLOAD_DIR}"
+    if [[ -e /usr/bin/wget ]];then
+      wget -c --user-agent="Mozilla" --no-check-certificate -P ${DOWNLOAD_DIR} "${DOCKER_URL}" || { logger error "${DOCKER_VER} 下载失败"; exit 1; }
+    else
+      curl -k -C-  --retry 3 -o "${DOWNLOAD_DIR}/${DOCKER_VER}" "${DOCKER_URL}" || { logger error "${DOCKER_VER} 下载失败"; exit 1; }
+    fi
+  
+  fi
+
+  mkdir -p ${DOCKER_TAR_DIR} ${DOCKER_BIN}
+  tar xvf "${DOWNLOAD_DIR}/${DOCKER_VER}" -C ${DOCKER_TAR_DIR}
+  logger debug "将docker二进制文件拷贝至${DOCKER_BIN}"
+  cp -r ${DOCKER_TAR_DIR}/docker/*  ${DOCKER_BIN}
+  rm -rf ${DOCKER_TAR_DIR}/docker
+  ln -sf ${DOCKER_BIN}/docker /bin/docker
+  
+}
+
+
+function install_docker() {
+
+  logger debug "生成docker服务启动文件"
+  cat > /etc/systemd/system/docker.service << EOF
+[Unit]
+Description=Docker Application Container Engine
+Documentation=http://docs.docker.io
+[Service]
+Environment="PATH=${DOCKER_BIN}:/bin:/sbin:/usr/bin:/usr/sbin"
+ExecStart=${DOCKER_BIN}/dockerd
+ExecStartPost=/sbin/iptables -I FORWARD -s 0.0.0.0/0 -j ACCEPT
+ExecReload=/bin/kill -s HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+Delegate=yes
+KillMode=process
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  logger debug "生成docker服务配置文件 /etc/docker/daemon.json"
+  mkdir -p /etc/docker
+  DOCKER_VER_MAIN=$(echo "$DOCKER_VER"|cut -d '-' -f2 | cut -d '.' -f1)
+  CGROUP_DRIVER="cgroupfs"
+  ((DOCKER_VER_MAIN>=20)) && CGROUP_DRIVER="systemd"  
+  cat > /etc/docker/daemon.json << EOF
+{
+  "exec-opts": ["native.cgroupdriver=$CGROUP_DRIVER"],
+  "registry-mirrors": [
+    "https://docker.1ms.run",
+    "https://hub1.nat.tf",
+    "https://docker.1panel.live",
+    "https://proxy.1panel.live",
+    "https://hub.rat.dev",
+    "https://docker.amingg.com"
+  ],
+  "insecure-registries": ["http://easzlab.io.local:5000"],
+  "max-concurrent-downloads": 10,
+  "log-driver": "json-file",
+  "log-level": "warn",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+    },
+  "data-root": "${DOCKER_DATA_ROOT}"
+}
+EOF
+
+  logger debug "生成守护进程 docker.socket"
+  cat > /etc/systemd/system/docker.socket << EOF
+[Unit]
+Description=Docker Socket for the API
+PartOf=docker.service
+
+[Socket]
+ListenStream=/run/docker.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=docker
+
+[Install]
+WantedBy=sockets.targe
+EOF
+
+  logger debug "生成containerd服务启动文件"
+cat >/etc/systemd/system/containerd.service << EOF
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target local-fs.target
+
+[Service]
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=${DOCKER_BIN}/containerd
+
+Type=notify
+Delegate=yes
+KillMode=process
+Restart=always
+LimitNPROC=infinity
+LimitCORE=infinity
+LimitNOFILE=1048576
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
+
+EOF
+
+  logger debug "启动、开机自启动docker服务"
+  systemctl enable docker
+  systemctl daemon-reload && systemctl restart docker && sleep 3
+}
+
+
+download_docker
+install_docker
 
